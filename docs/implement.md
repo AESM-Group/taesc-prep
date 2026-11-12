@@ -2,22 +2,36 @@
 
 ## ABACUS
 
-The program writes `/path/to/calculation/stru_out`. It reads `STRU`, or the
-`stru_file` specified in `INPUT`. It supports explicit `LATTICE_VECTORS` and
-the `Direct`, `Cartesian`, `Cartesian_au`, `Cartesian_angstrom`, and
-`Cartesian_angstrom_center_*` coordinate modes. It preserves species and
-atom order and wraps fractional positions into the reference unit cell.
-Angstrom conversion follows ABACUS's `BOHR_TO_A = 0.5291770` constant.
-For centered coordinates, it selects the requested Cartesian components
-of the cell center, as ABACUS does.
+The program writes `/path/to/calculation/stru_out`. It selects geometry in this
+order:
 
-If `STRU` is absent, the program reads a single-geometry `running_*.log` from
-`OUT.<suffix>` or from the supplied directory. `suffix` and `calculation`
-come from `INPUT` when available. The log route uses its printed geometry
-precision. Prefer `STRU` for full precision; for relaxation or dynamics,
-use the snapshot `STRU` corresponding to the exported electronic data.
-Structures specified through `latname` need an explicit-lattice snapshot
-or the log route.
+1. `OUT.<suffix>/STRU_FINAL`.
+2. The input structure specified by `stru_file`, or `STRU` by default.
+3. A single-geometry running log (such as `running_scf.log`) in `OUT.<suffix>`,
+   then in the supplied directory.
+
+The `suffix`, `calculation`, and `stru_file` settings come from `INPUT` when
+available. The suffix defaults to `ABACUS`. Structure files take priority over
+logs to retain their numerical precision. Logs are used only when neither
+structure file exists; ambiguous logs cause an error.
+
+The structure reader supports explicit `LATTICE_VECTORS` and the `Direct`,
+`Cartesian`, `Cartesian_au`, `Cartesian_angstrom`, and
+`Cartesian_angstrom_center_*` coordinate modes. It preserves species and atom
+order. For both `STRU_FINAL` and the input structure, lattice vectors in Bohr
+are `LATTICE_VECTORS` multiplied by `LATTICE_CONSTANT`. Before converting
+fractional positions to Cartesian coordinates, components outside `[0, 1)`
+are translated by integer lattice periods into that interval (for example,
+`-0.25` becomes `0.75`, and `1.0` becomes `0.0`). Components already within
+the interval are unchanged.
+
+Only Angstrom coordinate modes use `BOHR_TO_A = 0.5291770` to convert atomic
+coordinates to Bohr. For centered coordinates, the reader selects the requested
+Cartesian components of the cell center, as ABACUS does.
+
+For relaxation or dynamics, the selected structure must correspond to the
+exported electronic data. Structures specified through `latname` need an
+explicit-lattice snapshot or the log route.
 
 The program includes spatial symmetry operations when available in the
 ABACUS output. These operations use the

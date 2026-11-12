@@ -8,6 +8,7 @@ from .structure import fractional_coordinates, multiply_row, reciprocal_vectors
 
 
 # ABACUS source_base/constants.h: BOHR_TO_A.
+# Only used when reading from OUT.ABACUS/running_scf.log
 BOHR_TO_ANGSTROM = 0.5291770
 SECTIONS = {
     "ATOMIC_SPECIES", "NUMERICAL_ORBITAL", "NUMERICAL_DESCRIPTOR",
@@ -43,7 +44,7 @@ class AbacusSource(Source):
             structure["operations"] = read_symrot(symfile.read_text())
         structure["source_paths"] = (source, symfile) if symfile else (source,)
         if fmt == "log":
-            structure["notes"] = ("geometry precision is limited by the running log; prefer STRU.",)
+            structure["notes"] = ("geometry precision is limited by the running log; prefer STRU_FINAL when available.",)
         return structure
 
 
@@ -56,7 +57,6 @@ def numbers(line, count=3):
     if not all(math.isfinite(x) for x in values):
         raise ValueError(f"Non-finite number: {line!r}")
     return values
-
 
 
 def read_stru(text):
@@ -120,8 +120,9 @@ def read_stru(text):
                 else:
                     xyz = [x*factors[mode] + s for x, s in zip(xyz, shift)]
                     frac = fractional_coordinates(xyz, reciprocal)
-                # ABACUS check_dtau moves atoms into the reference unit cell.
-                xyz = multiply_row([x % 1.0 for x in frac], lattice)
+                # Translate fractional coordinates into [0, 1) before Cartesian conversion.
+                frac = [x if 0.0 <= x < 1.0 else x % 1.0 for x in frac]
+                xyz = multiply_row(frac, lattice)
                 positions.append(xyz)
                 types.append(it)
     except StopIteration as exc:
@@ -129,7 +130,6 @@ def read_stru(text):
     if next(rows, None) is not None:
         raise ValueError("Unexpected data after ATOMIC_POSITIONS")
     return {"lattice": lattice, "positions": positions, "types": types}
-
 
 
 def read_log(text):
@@ -194,7 +194,6 @@ def read_log(text):
     return {"lattice": lattice, "positions": positions, "types": types}
 
 
-
 def read_symrot(text):
     """Extract fractional row-convention operations from the ABACUS spatial symmetry export."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -231,10 +230,10 @@ def read_symrot(text):
     return operations
 
 
-
 def discover_abacus(directory):
     """Return (source path, format, output directory), or None if absent.
 
+    Prefer OUT.<suffix>/STRU_FINAL, then the input structure, then a running log.
     Raise ValueError for an invalid directory or ambiguous running logs.
     """
     if not directory.is_dir():
@@ -248,6 +247,9 @@ def discover_abacus(directory):
                 settings[fields[0].lower()] = fields[1]
     stru = directory / settings.get("stru_file", "STRU")
     outdir = directory / ("OUT." + settings.get("suffix", "ABACUS"))
+    final_stru = outdir / "STRU_FINAL"
+    if final_stru.is_file():
+        return final_stru, "stru", outdir
     if stru.is_file():
         return stru, "stru", outdir
     calculation = settings.get("calculation")
@@ -259,6 +261,6 @@ def discover_abacus(directory):
     if len(logs) == 1:
         return logs[0], "log", logs[0].parent
     if len(logs) > 1:
-        raise ValueError("Multiple running logs found; specify calculation in INPUT or use a directory containing one log")
+        raise ValueError(
+            "Multiple running logs found; specify calculation in INPUT or use a directory containing one log")
     return None
-

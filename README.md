@@ -66,11 +66,14 @@ or by another package, e.g. pyatb.
 
 ## Development
 
-Run the tests after installation:
+Install the test dependencies and run the tests:
 
 ```bash
-python3 -m unittest discover -s tests -v
+python -m pip install -e ".[test]"
+python -m pytest -v
 ```
+
+See [Real-calculation tests](tests/README.md) for the case manifest and reference-data workflow.
 
 See [Implementation details](docs/implement.md) for source parsing, conversion
 interfaces, and output conventions.
