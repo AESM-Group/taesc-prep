@@ -2,7 +2,12 @@
 
 ## ABACUS
 
-The program writes `/path/to/calculation/stru_out`. It selects geometry in this
+Output filenames follow LibRPA's `input_preset=abacus`: `stru_out.txt` and
+`bz_sample.txt`.
+
+### Structure
+
+The program writes `/path/to/calculation/stru_out.txt`. It selects geometry in this
 order:
 
 1. `OUT.<suffix>/STRU_FINAL`.
@@ -41,7 +46,7 @@ to reconstruct the operations. The program does not generate operations
 or spin-symmetry metadata. All input files must belong to the same geometry.
 No k-point block is written.
 
-An existing `stru_out` is replaced after parsing succeeds. The program uses
+An existing `stru_out.txt` is replaced after parsing succeeds. The program uses
 only the Python standard library. The current reader supports ABACUS;
 FHI-aims directory support is reserved for a later extension.
 
@@ -49,7 +54,40 @@ The ABACUS conventions follow its
 [coordinate conversion source](https://github.com/deepmodeling/abacus-develop/blob/develop/source/source_cell/read_atoms_helper.cpp)
 and [symmetry export source](https://github.com/deepmodeling/abacus-develop/blob/develop/source/source_lcao/module_ri/module_exx_symmetry/symm_rot_out.cpp).
 
+### Brillouin-zone sampling
 
+ABACUS conversion requires `OUT.<suffix>/KPT.info` and writes `bz_sample.txt`.
+The output suffix follows `INPUT`, with `ABACUS` as the default.
+
+The parser reads reduced fractional points and the full-grid reduction table.
+It infers mesh divisions from the distinct fractional coordinates of the full
+grid, then checks completeness and uniform spacing. Reduced coordinates retain
+their printed values. Full-grid coordinates are placed in `[0, 1)` before
+Cartesian conversion. Cartesian vectors are fractional row vectors multiplied
+by the structure's reciprocal lattice, including `2*pi`, in inverse Bohr.
+This uses the same selected structure as `stru_out.txt`.
+
+The format follows ABACUS commit `52bc7978961c6fb4be330205cf71f00438c68497`:
+[`rpa_lri_bz.cpp`](https://github.com/deepmodeling/abacus-develop/blob/52bc7978961c6fb4be330205cf71f00438c68497/source/source_lcao/module_rpa/rpa_lri_bz.cpp)
+and [`rpa_lri_bz_io.cpp`](https://github.com/deepmodeling/abacus-develop/blob/52bc7978961c6fb4be330205cf71f00438c68497/source/source_lcao/module_rpa/rpa_lri_bz_io.cpp).
+
+The output contains:
+
+1. Three mesh divisions.
+2. SCF and irreducible point counts, both equal to the reduced count.
+3. Reduced-point rows: index, normalized weight, three fractional coordinates,
+   three Cartesian coordinates, irreducible index, and SCF representative index.
+4. If the grid is reduced, `full_kmap N` followed by the full-grid rows:
+   index, three Cartesian coordinates, and SCF representative index.
+
+All indices are one-based. Reduced and full-grid row orders follow `KPT.info`.
+Weights equal the number of full-grid points assigned to each representative,
+divided by the full-grid size. Printed weights are checked against these
+multiplicities, allowing their decimal rounding error. This avoids carrying
+four-decimal weight rounding into the output. Coordinates remain limited by
+`KPT.info` precision. If no reduction table is present, the listed points must
+form a complete uniform grid and receive identity mappings. Band paths and
+incomplete grids raise errors.
 
 ## Output conventions
 
@@ -67,9 +105,12 @@ for the file specification.
 
 `detect_source(directory)` identifies the calculation and returns a `Source`
 instance. The CLI uses this function before conversion. ABACUS detection
-reuses `discover_abacus`, including the `stru_file`, `suffix`, and `calculation`
-settings from `INPUT`. A directory without discoverable ABACUS input produces
-an error.
+uses the boolean result of `discover_abacus`, which checks file markers only.
+`AbacusSource` selects the structure file and parser during extraction, using
+`stru_file`, `suffix`, and `calculation` from `INPUT`. It locates `KPT.info`
+when BZ sampling is extracted. Initialization only stores the directory and
+enables the supported conversions; it does not read configuration or cache
+input file paths. Unrecognized directories produce an error.
 
 `Source` implements the common conversion workflow. `AbacusSource` supplies
 ABACUS data through `_extract_stru`:
@@ -83,14 +124,18 @@ print(result.output)
 ```
 
 `convert(output=None, *, include_symmetry=True)` runs the enabled conversions
-and returns a `ConversionResult` with `output`, `n_atoms`, `n_symops`, and `notes`.
+and returns a `ConversionResult` with `output`, `n_atoms`, `n_symops`, `n_kpoints`,
+`n_full_kpoints`, and `notes`. K-point counts are zero when BZ conversion is disabled.
 `output` is a destination directory and defaults to the input directory.
 The returned `result.output` is that directory; the structure file is
-`result.output / "stru_out"`. Set `include_symmetry=False` to omit spatial
+`result.output / source.stru_filename`. Set `include_symmetry=False` to omit spatial
 symmetry operations. If no conversion is enabled, the result has `output=None`,
 zero counts, and no notes; no files are read or written.
 
-`Source` initializes `process_stru=False`. A concrete source enables structure
+The shared conversion methods use `stru_filename` and `bz_sampling_filename`
+from the concrete source.
+
+`Source` initializes `process_stru=False` and `process_bz_sampling=False`. A concrete source enables structure
 processing in its initializer and implements `_extract_stru`:
 
 ```python
@@ -124,3 +169,24 @@ and returns `ConversionResult`.
 Missing optional keys default to empty sequences. The writer computes reciprocal
 vectors from `lattice`. It requires the three geometry keys and uses `operations`
 when present. The shared conversion method handles `notes` and `source_paths`.
+
+For BZ conversion, a concrete source sets `process_bz_sampling=True` and
+implements `_extract_bz_sampling`. `Source.convert_bz_sampling` adds the lattice
+from the extracted structure and calls `write_taesc_bz_sampling` in `output.py`.
+It returns the sampling dictionary. The ABACUS constructor always sets
+`process_bz_sampling=True`.
+
+The sampling dictionary has these required keys:
+
+| Key | Value |
+| --- | --- |
+| `mesh` | Three positive mesh divisions. |
+| `direct` | Reduced fractional k vectors, in SCF order. |
+| `weights` | Positive weights normalized to sum to one. |
+| `full_direct` | Full-grid fractional vectors, in mapping-table order. |
+| `full_map` | One-based indices into `direct`, one per full-grid point. |
+
+`notes` and `source_paths` are optional, as for structure extraction.
+The shared conversion method supplies `lattice` before writing. The writer
+normalizes weights and validates dimensions, representative indices, and
+multiplicities before replacing the destination file.

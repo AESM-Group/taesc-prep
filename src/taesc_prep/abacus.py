@@ -1,11 +1,15 @@
-"""Read ABACUS structures, running logs, and spatial symmetry operations."""
+"""Read ABACUS calculation directory."""
 
+from collections import Counter
+from decimal import Decimal
 import math
+from pathlib import Path
 import re
 
 from .source import Source
 from .structure import fractional_coordinates, multiply_row, reciprocal_vectors
 
+__all__ = ["AbacusSource", "discover_abacus"]
 
 # ABACUS source_base/constants.h: BOHR_TO_A.
 # Only used when reading from OUT.ABACUS/running_scf.log
@@ -20,18 +24,19 @@ SECTIONS = {
 class AbacusSource(Source):
     """Convert the automatically discovered files in an ABACUS directory."""
 
+    process_stru = True
+    stru_filename = "stru_out.txt"
+
+    process_bz_sampling = True
+    bz_sampling_filename = "bz_sample.txt"
+
     def __init__(self, directory):
         super().__init__(directory)
-        self.process_stru = True
 
     def _extract_stru(self, *, include_symmetry=True) -> dict:
         """Read ABACUS geometry and optional spatial symmetry operations."""
-        discovered = discover_abacus(self.directory)
-        if discovered is None:
-            raise ValueError("No ABACUS STRU or running log found; check the directory and stru_file in INPUT")
-        source, fmt, outdir = discovered
-        text = source.read_text()
-        structure = read_stru(text) if fmt == "stru" else read_log(text)
+        source, reader, outdir = self._select_structure()
+        structure = reader(source.read_text())
         symfile = None
         if include_symmetry:
             candidates = list(dict.fromkeys([self.directory / "symrot_R.txt",
@@ -43,9 +48,43 @@ class AbacusSource(Source):
         if symfile:
             structure["operations"] = read_symrot(symfile.read_text())
         structure["source_paths"] = (source, symfile) if symfile else (source,)
-        if fmt == "log":
+        if reader is read_log:
             structure["notes"] = ("geometry precision is limited by the running log; prefer STRU_FINAL when available.",)
         return structure
+
+    def _extract_bz_sampling(self) -> dict:
+        settings = read_input_settings(self.directory)
+        outdir = self.directory / ("OUT." + settings.get("suffix", "ABACUS"))
+        kpt_info = outdir / "KPT.info"
+        sampling = read_kpt_info(kpt_info.read_text())
+        sampling["source_paths"] = (kpt_info,)
+        return sampling
+
+    def _select_structure(self):
+        """Select geometry and its parser when structure extraction is requested."""
+        directory = self.directory
+        if not directory.is_dir():
+            raise ValueError(f"Expected a calculation directory: {directory}")
+        settings = read_input_settings(directory)
+        stru = directory / settings.get("stru_file", "STRU")
+        outdir = directory / ("OUT." + settings.get("suffix", "ABACUS"))
+        final_stru = outdir / "STRU_FINAL"
+        if final_stru.is_file():
+            return final_stru, read_stru, outdir
+        if stru.is_file():
+            return stru, read_stru, outdir
+        calculation = settings.get("calculation")
+        logs = ([outdir / f"running_{calculation}.log"] if calculation
+                else sorted(outdir.glob("running_*.log")))
+        logs = [path for path in logs if path.is_file()]
+        if not logs:
+            logs = sorted(directory.glob("running_*.log"))
+        if len(logs) == 1:
+            return logs[0], read_log, logs[0].parent
+        if len(logs) > 1:
+            raise ValueError(
+                "Multiple running logs found; specify calculation in INPUT or use a directory containing one log")
+        raise ValueError("No ABACUS structure or running log found; check stru_file and suffix in INPUT")
 
 
 def numbers(line, count=3):
@@ -230,14 +269,21 @@ def read_symrot(text):
     return operations
 
 
-def discover_abacus(directory):
-    """Return (source path, format, output directory), or None if absent.
-
-    Prefer OUT.<suffix>/STRU_FINAL, then the input structure, then a running log.
-    Raise ValueError for an invalid directory or ambiguous running logs.
-    """
+def discover_abacus(directory) -> bool:
+    """Identify an ABACUS directory from file markers without selecting inputs."""
+    directory = Path(directory)
     if not directory.is_dir():
-        raise ValueError(f"Expected a calculation directory: {directory}")
+        return False
+    if any((directory / name).is_file() for name in ("INPUT", "STRU")):
+        return True
+    return any(path.is_file()
+               for pattern in ("running_*.log", "OUT.*/STRU_FINAL",
+                               "OUT.*/running_*.log", "OUT.*/KPT.info")
+               for path in directory.glob(pattern))
+
+
+def read_input_settings(directory):
+    """Read settings from an optional ABACUS INPUT file."""
     settings = {}
     input_file = directory / "INPUT"
     if input_file.is_file():
@@ -245,22 +291,84 @@ def discover_abacus(directory):
             fields = re.split(r"#|//", raw, maxsplit=1)[0].split()
             if len(fields) >= 2:
                 settings[fields[0].lower()] = fields[1]
-    stru = directory / settings.get("stru_file", "STRU")
-    outdir = directory / ("OUT." + settings.get("suffix", "ABACUS"))
-    final_stru = outdir / "STRU_FINAL"
-    if final_stru.is_file():
-        return final_stru, "stru", outdir
-    if stru.is_file():
-        return stru, "stru", outdir
-    calculation = settings.get("calculation")
-    logs = ([outdir / f"running_{calculation}.log"] if calculation
-            else sorted(outdir.glob("running_*.log")))
-    logs = [path for path in logs if path.is_file()]
-    if not logs:
-        logs = sorted(directory.glob("running_*.log"))
-    if len(logs) == 1:
-        return logs[0], "log", logs[0].parent
-    if len(logs) > 1:
-        raise ValueError(
-            "Multiple running logs found; specify calculation in INPUT or use a directory containing one log")
-    return None
+    return settings
+
+
+def read_kpt_info(text):
+    """Read a uniform full grid and its reduction from ABACUS KPT.info.
+
+    Return mesh, reduced fractional points, normalized weights, full fractional
+    points, and one-based representative indices. Weights come from exact map
+    multiplicities because KPT.info prints weights to limited precision.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    counts = re.findall(r"\bnkstot now\s*=\s*(\d+)", text)
+    if len(counts) != 1 or int(counts[0]) <= 0:
+        raise ValueError("Expected one positive nkstot now in KPT.info")
+    n_reduced = int(counts[0])
+
+    def table(header, count, width):
+        indices = [i for i, line in enumerate(lines) if line == header]
+        if len(indices) != 1:
+            raise ValueError(f"Expected one {header} table in KPT.info")
+        start = indices[0] + 2  # Skip column headings.
+        rows = [line.split() for line in lines[start:start + count]]
+        if len(rows) != count or any(len(row) != width for row in rows):
+            raise ValueError(f"Incomplete {header} table in KPT.info")
+        if any(int(row[0]) != i for i, row in enumerate(rows, 1)):
+            raise ValueError(f"Nonsequential indices in {header}")
+        return rows
+
+    rows = table("K-POINTS DIRECT COORDINATES", n_reduced, 5)
+    reduced = [numbers(" ".join(row[1:4])) for row in rows]
+    printed_weights = [numbers(row[4], 1)[0] for row in rows]
+    # A zero printed weight can result from rounding on a large grid.
+    if any(weight < 0 for weight in printed_weights) or sum(printed_weights) <= 0:
+        raise ValueError("Invalid k-point weights in KPT.info")
+    rounding = [0.5 * 10.0 ** Decimal(row[4].replace("D", "E").replace("d", "e")).as_tuple().exponent
+                for row in rows]
+    full_counts = re.findall(r"\bnkstot\s*=\s*(\d+)", text)
+    if full_counts:
+        if len(full_counts) != 1 or int(full_counts[0]) < n_reduced:
+            raise ValueError("Invalid full-grid count in KPT.info")
+        full_rows = table("K-POINTS REDUCTION ACCORDING TO SYMMETRY", int(full_counts[0]), 8)
+        full = [numbers(" ".join(row[1:4])) for row in full_rows]
+        mapping = [int(row[4]) for row in full_rows]
+        for row, representative in zip(full_rows, mapping):
+            if not 1 <= representative <= n_reduced:
+                raise ValueError("KPT.info representative is outside the reduced grid")
+            expected = reduced[representative - 1]
+            reported = numbers(" ".join(row[5:8]))
+            if any(abs(a - b - round(a - b)) > 2e-8 for a, b in zip(expected, reported)):
+                raise ValueError("KPT.info representative coordinates disagree with the reduced table")
+    else:
+        if any("K-POINTS REDUCTION" in line for line in lines):
+            raise ValueError("Missing full-grid count in KPT.info")
+        full = reduced
+        mapping = list(range(1, n_reduced + 1))
+
+    # Infer divisions from the complete fractional grid, preserving its offsets.
+    wrapped = [tuple(round(x % 1.0, 8) % 1.0 for x in point) for point in full]
+    axes = [sorted({point[i] for point in wrapped}) for i in range(3)]
+    mesh = [len(axis) for axis in axes]
+    if math.prod(mesh) != len(full) or len(set(wrapped)) != len(full):
+        raise ValueError("KPT.info does not contain a complete uniform three-dimensional grid")
+    for axis in axes:
+        spacing = 1.0 / len(axis)
+        if any(abs((axis[(i + 1) % len(axis)] - value) % 1.0 - spacing) > 2e-8
+               for i, value in enumerate(axis)) and len(axis) > 1:
+            raise ValueError("KPT.info grid spacing is not uniform")
+    grid = set(wrapped)
+    if any(tuple(round(x % 1.0, 8) % 1.0 for x in point) not in grid for point in reduced):
+        raise ValueError("KPT.info reduced point is absent from the full grid")
+    multiplicity = Counter(mapping)
+    if len(multiplicity) != n_reduced:
+        raise ValueError("KPT.info full mapping omits a reduced point")
+    weights = [multiplicity[i] / len(full) for i in range(1, n_reduced + 1)]
+    total = sum(printed_weights)
+    total_rounding = sum(rounding)
+    for printed, expected, error in zip(printed_weights, weights, rounding):
+        if abs(printed - expected * total) > error + expected * total_rounding + 1e-12:
+            raise ValueError("KPT.info weight disagrees with full-grid multiplicity")
+    return {"mesh": mesh, "direct": reduced, "weights": weights,
+            "full_direct": wrapped, "full_map": mapping}

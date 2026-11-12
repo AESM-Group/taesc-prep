@@ -60,9 +60,10 @@ The same command is available as `python3 -m taesc_prep`.
 Other essential dataset inputs are generated either directly by the software,
 or by another package, e.g. pyatb.
 
-|                      | ABACUS | FHI-aims |
-| -------------------- | ------ | -------- |
-| Structure `stru_out` | X      |          |
+|                             | ABACUS | FHI-aims |
+| --------------------------- | ------ | -------- |
+| Structure `stru_out.txt`    | X      |          |
+| BZ sampling `bz_sample.txt` | X      |          |
 
 ## Development
 

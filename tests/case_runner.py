@@ -29,13 +29,9 @@ def load_cases(path):
                 raise ValueError(f"{name}: invalid {key}")
         if "skip" in case:
             raise ValueError(f"{name}: skip is not supported; every declared case must run")
-        files = case.get("files", ["stru_out"])
-        if not isinstance(files, list) or not files or len(files) != len(set(files)):
-            raise ValueError(f"{name}: files must be a nonempty list without duplicates")
-        for filename in files:
-            if (not isinstance(filename, str) or not filename or filename == "."
-                    or Path(filename).is_absolute() or ".." in Path(filename).parts):
-                raise ValueError(f"{name}: invalid output filename {filename!r}")
+        for key in ("n_kpoints", "n_full_kpoints"):
+            if key in case and (type(case[key]) is not int or case[key] <= 0):
+                raise ValueError(f"{name}: invalid {key}")
         for key in ("rtol", "atol"):
             value = case.get(key, DEFAULT_TOLERANCE)
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
@@ -173,12 +169,14 @@ class ConversionCase(unittest.TestCase):
         case = self.case
         source_dir = self.data_dir / "source" / self.name
         reference_dir = self.data_dir / "ref" / self.name
-        files = case.get("files", ["stru_out"])
         if not source_dir.is_dir():
             raise FileNotFoundError(f"Missing source directory: {source_dir}")
-        for filename in files:
-            if not (reference_dir / filename).is_file():
-                raise FileNotFoundError(f"Missing reference file: {reference_dir / filename}")
+        if not reference_dir.is_dir():
+            raise FileNotFoundError(f"Missing reference directory: {reference_dir}")
+        files = {p.relative_to(reference_dir).as_posix()
+                 for p in reference_dir.rglob("*") if p.is_file()}
+        if not files:
+            raise FileNotFoundError(f"Missing reference files: {reference_dir}")
         self.assertIn(case["source"], SOURCE_CLASSES,
                       f"Source implementation not registered for {case['source']!r}")
         source = detect_source(source_dir)
@@ -189,12 +187,17 @@ class ConversionCase(unittest.TestCase):
             self.assertEqual(result.output, output_dir)
             self.assertEqual(result.n_atoms, case["n_atoms"], "Atom count")
             self.assertEqual(result.n_symops, case["n_symops"], "Symmetry-operation count")
+            for key in ("n_kpoints", "n_full_kpoints"):
+                if key in case:
+                    self.assertEqual(getattr(result, key), case[key], key)
             generated = {p.relative_to(output_dir).as_posix()
                          for p in output_dir.rglob("*") if p.is_file()}
-            self.assertEqual(generated, set(files), "Generated output files")
-            for filename in files:
+            if generated != files:
+                self.fail(f"Output files differ: missing={sorted(files - generated)}, "
+                          f"unexpected={sorted(generated - files)}")
+            for filename in sorted(files):
                 with self.subTest(file=filename):
-                    compare = compare_stru if filename == "stru_out" else compare_text
+                    compare = compare_stru if filename in ("stru_out", "stru_out.txt") else compare_text
                     compare(output_dir / filename, reference_dir / filename,
                                  rtol=case.get("rtol", DEFAULT_TOLERANCE),
                                  atol=case.get("atol", DEFAULT_TOLERANCE))

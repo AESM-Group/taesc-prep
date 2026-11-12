@@ -7,11 +7,9 @@ def multiply_row(vector, matrix):
     return [sum(vector[i] * matrix[i][j] for i in range(3)) for j in range(3)]
 
 
-
 def fractional_coordinates(xyz, reciprocal):
     return [sum(x*y for x, y in zip(xyz, row)) / (2*math.pi)
             for row in reciprocal]
-
 
 
 def reciprocal_vectors(lattice):

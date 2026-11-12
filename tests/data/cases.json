@@ -2,6 +2,8 @@
   "001_abacus_LiH_sym": {
     "source": "abacus",
     "n_atoms": 2,
-    "n_symops": 24
+    "n_symops": 24,
+    "n_kpoints": 10,
+    "n_full_kpoints": 125
   }
 }

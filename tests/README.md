@@ -19,11 +19,11 @@ tests/
 
 `source/<case-name>` contains the real calculation inputs and outputs needed
 by the converter. Keep the producing software version and calculation settings
-with these files. `ref/<case-name>` contains the expected TAESC output files.
-Record the provenance of each reference, for example in a README beside it.
+with these files. `ref/<case-name>` contains only the expected TAESC output files,
+using the names `stru_out.txt` and `bz_sample.txt`.
 
 The runner calls `detect_source` and `convert`, checks the detected source,
-atom and symmetry-operation counts, and compares every declared output file.
+atom and symmetry-operation counts, and compares every file in the reference directory.
 Each case has its own temporary output directory, which is removed after the
 test. Source and reference data are not modified.
 
@@ -36,7 +36,9 @@ Every case listed in `cases.json` is run:
   "001_abacus_LiH_sym": {
     "source": "abacus",
     "n_atoms": 2,
-    "n_symops": 24
+    "n_symops": 24,
+    "n_kpoints": 10,
+    "n_full_kpoints": 125
   }
 }
 ```
@@ -49,18 +51,20 @@ the conversion result.
 | `source` | Yes | Expected source implementation; currently `abacus`. |
 | `n_atoms` | Yes | Expected atom count. |
 | `n_symops` | Yes | Expected number of exported spatial symmetry operations. |
-| `files` | No | Relative output filenames; defaults to `["stru_out"]`. |
+| `n_kpoints` | No | Expected SCF k-point count. |
+| `n_full_kpoints` | No | Expected full-grid k-point count. |
 | `rtol` | No | Relative tolerance for floating-point tokens; defaults to `1e-8`. |
 | `atol` | No | Absolute tolerance for floating-point tokens; defaults to `1e-8`. |
 
-Missing source directories or reference files raise `FileNotFoundError`.
+Missing source or reference directories, and empty reference directories,
+raise `FileNotFoundError`.
 Malformed manifests also cause errors. Skipping declared cases is not supported;
 an unfinished case makes the test run fail until its data are supplied.
 
-The runner supports multiple output files through `files`. Every listed file
-must exist in both the reference and generated directories. Unexpected generated
-files also fail the case. Reference directories may contain provenance notes
-that are not included in `files`.
+The runner discovers expected files directly from `ref/<case-name>`. Generated
+and reference files must have exactly the same relative filenames. A missing
+output, an output without a reference, or a content mismatch fails the case.
+`cases.json` does not list output filenames.
 
 ## Comparisons
 
@@ -70,7 +74,7 @@ must match exactly. Other numeric tokens must be finite and satisfy
 `abs(actual - reference) <= max(atol, rtol * max(abs(actual), abs(reference)))`.
 Fortran `D` exponents are accepted.
 
-For `stru_out`, lattice vectors and atoms are compared in their original order.
+For `stru_out.txt`, lattice vectors and atoms are compared in their original order.
 Symmetry operations are normalized to the `row` convention: a `col` rotation
 matrix is transposed, while its translation components are unchanged. Operations
 are then matched one-to-one without regard to order. Rotation matrices must match
@@ -117,3 +121,6 @@ To add a case, prepare `source/<case-name>` and independently verified output
 files in `ref/<case-name>`, then add its metadata to `cases.json`. Register new
 source classes in `case_runner.SOURCE_CLASSES` when their implementations become
 available. No placeholder FHI-aims conversion is provided.
+
+Case `001` compares both `stru_out.txt` and `bz_sample.txt`. The BZ reference
+comes from the supplied ABACUS-native output.

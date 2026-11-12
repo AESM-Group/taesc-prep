@@ -4,17 +4,17 @@ from pathlib import Path
 
 from .source import Source
 from .abacus import AbacusSource, discover_abacus
+from .aims import AimsSource, discover_aims
 
 
 def detect_source(directory) -> Source:
-    """Return a source instance without converting the calculation data.
-
-    Recognize ABACUS input directories and standalone running-log directories.
-    Reject unknown or mixed sources. FHI-aims markers are recognized, but its
-    source implementation is not available yet.
-    """
+    """Identify the calculation source without choosing conversion inputs."""
     directory = Path(directory)
-    abacus = discover_abacus(directory) is not None
-    if abacus:
+    if not directory.is_dir():
+        raise ValueError(f"Expected a calculation directory: {directory}")
+    if discover_abacus(directory):
         return AbacusSource(directory)
-    raise ValueError(f"Cannot detect a supported calculation source in {directory}")
+    if discover_aims(directory):
+        return AimsSource(directory)
+    raise ValueError(
+        f"Cannot detect a supported calculation source in {directory}")

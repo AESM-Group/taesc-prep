@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -49,6 +50,42 @@ class TestCaseRunner(unittest.TestCase):
                 self.assertIn(f"FileNotFoundError: Missing {missing}", result.errors[0][1])
                 self.assertFalse(result.failures or result.skipped)
 
+    def test_real_case_requires_complete_matching_reference(self):
+        data = Path(__file__).parent / "data"
+        name = "001_abacus_LiH_sym"
+        case = load_cases(data / "cases.json")[name]
+        for change in ("missing_output", "extra_output", "content", "empty_reference"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp)
+                (path / "source").symlink_to((data / "source").resolve(), target_is_directory=True)
+                reference = path / "ref" / name
+                shutil.copytree(data / "ref" / name, reference)
+                (path / "cases.json").write_text(json.dumps({name: case}))
+                if change == "missing_output":
+                    shutil.copyfile(reference / "stru_out.txt", reference / "extra_reference")
+                elif change == "extra_output":
+                    (reference / "bz_sample.txt").unlink()
+                elif change == "content":
+                    bz = reference / "bz_sample.txt"
+                    bz.write_text(bz.read_text() + "\nextra token\n")
+                else:
+                    for file in reference.iterdir():
+                        file.unlink()
+                result = unittest.TestResult()
+                build_suite(path).run(result)
+                self.assertEqual(result.testsRun, 1)
+                self.assertFalse(result.skipped)
+                if change == "empty_reference":
+                    self.assertEqual(len(result.errors), 1)
+                    self.assertIn("Missing reference files", result.errors[0][1])
+                else:
+                    self.assertEqual(len(result.failures), 1)
+                    self.assertFalse(result.errors)
+                    expected = {"missing_output": "missing=['extra_reference']",
+                                "extra_output": "unexpected=['bz_sample.txt']",
+                                "content": "token count"}[change]
+                    self.assertIn(expected, result.failures[0][1])
+
     def test_invalid_manifest_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/"cases.json"
@@ -66,7 +103,7 @@ class TestStructureComparison(unittest.TestCase):
     """Exercise comparison using the real case's independently supplied reference."""
 
     def setUp(self):
-        reference = Path(__file__).parent / "data/ref/001_abacus_LiH_sym/stru_out"
+        reference = Path(__file__).parent / "data/ref/001_abacus_LiH_sym/stru_out.txt"
         self.rows = reference.read_text().splitlines()
         self.symmetry_start = 7 + int(self.rows[6])
         self.convention = self.rows[self.symmetry_start].split()[1]

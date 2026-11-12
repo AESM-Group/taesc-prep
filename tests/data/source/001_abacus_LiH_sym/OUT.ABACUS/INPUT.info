@@ -439,7 +439,7 @@ restart_save                   0 #print to disk every step for restart
 rpa                            1 #true:generate output files used in rpa calculation; false:(default)
 rpa_out_vel                    0 #whether to output velocity matrix for librpa
 rpa_outdir                     OUT.librpa/ #output directory for librpa
-out_librpa_ver                 0 #LibRPA output reader version
+out_librpa_ver                 1 #LibRPA output reader version
 out_v2d_method                 ewald #strict-2D full Coulomb construction used by LibRPA reader-v1 output
 out_v2d_ecut                   0 #reciprocal cutoff for direct mixed-Fourier strict-2D Coulomb output
 out_v2d_kz                     0 #kz quadrature order for direct mixed-Fourier strict-2D Coulomb output

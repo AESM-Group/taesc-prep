@@ -1,7 +1,7 @@
 """Prepare LibRPA input files from a calculation directory.
 
 Currently supports ABACUS STRU or single-geometry running logs and writes
-stru_out."""
+stru_out.txt and bz_sample.txt."""
 
 import argparse
 from pathlib import Path
@@ -25,7 +25,10 @@ def main(argv=None):
         parser.exit(2, f"error: {exc}\n")
     for note in result.notes:
         print(f"Note: {note}", file=sys.stderr)
-    print(f"Wrote {result.output / 'stru_out'}: {result.n_atoms} atoms, "
+    print(f"Wrote {result.output / source.stru_filename}: {result.n_atoms} atoms, "
           f"{result.n_symops} symmetry operations; no k-point block")
+    if result.n_kpoints:
+        print(f"Wrote {result.output / source.bz_sampling_filename}: {result.n_kpoints} SCF k-points, "
+              f"{result.n_full_kpoints} full-grid k-points")
     return 0
 
