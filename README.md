@@ -5,7 +5,8 @@ calculations.
 
 ## Installation
 
-Python 3.9 or later is required. There are no runtime dependencies.
+Python 3.9 or later is required. There are no runtime dependencies other than
+the Python standard library.
 
 Create a virtual environment inside the repository and install an editable copy:
 
