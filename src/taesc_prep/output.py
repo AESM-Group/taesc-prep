@@ -38,6 +38,12 @@ def write_taesc_stru(structure, output):
         for rotation, translation in operations:
             rows.append(" ".join(str(x) for x in rotation) + " "
                         + " ".join(f"{x:.16e}" for x in translation))
+    spin = structure.get("spin_symmetry")
+    if spin:
+        rows.append(f"spin_symmetry {spin['grey_group']} {spin['spin_source']}")
+        for antiunitary, components in spin["operations"]:
+            rows.append(str(antiunitary) + " "
+                        + " ".join(f"{x:.15e}" for x in components))
     path = Path(output)
     path.write_text("\n".join(rows) + "\n")
     return path

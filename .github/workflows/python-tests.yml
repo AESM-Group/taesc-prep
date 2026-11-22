@@ -11,12 +11,20 @@ permissions:
 jobs:
   test:
     name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.12", "3.15"]
+        include:
+          # ubuntu-latest is Ubuntu 26.04, whose setup-python cache has no 3.9;
+          # the declared floor still needs a runner that provides it.
+          - python-version: "3.9"
+            runner: ubuntu-22.04
+          - python-version: "3.12"
+            runner: ubuntu-latest
+          - python-version: "3.15"
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python

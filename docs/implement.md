@@ -42,9 +42,16 @@ The program includes spatial symmetry operations when available in the
 ABACUS output. These operations use the
 fractional `row` convention. Rotations and translations retain the precision
 of the ABACUS export. A symmetry count in `running_*.log` is insufficient
-to reconstruct the operations. The program does not generate operations
-or spin-symmetry metadata. All input files must belong to the same geometry.
+to reconstruct the operations. All input files must belong to the same geometry.
 No k-point block is written.
+
+For `nspin 4` runs the program also writes the `spin_symmetry` block, which
+carries the SU(2) representative of every operation. The convention is
+`U sigma_i U^dagger = sum_j W_ij sigma_j` with `W = R_proper^T`, matching
+ABACUS's `ModuleSymmetry::SpinRotation::so3_to_su2`. Magnetic runs add the
+antiunitary elements `Theta*g` from the `Antiunitary operations:` trailer
+that ABACUS appends to `symrot_R.txt`; when that trailer is absent the block
+holds the unitary operations only.
 
 An existing `stru_out.txt` is replaced after parsing succeeds. The program uses
 only the Python standard library. The current reader supports ABACUS;
