@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 from .source import Source
+from .spin import cartesian_rotation, flatten_su2, rotation_to_su2
 from .structure import fractional_coordinates, multiply_row, reciprocal_vectors
 
 __all__ = ["AbacusSource", "discover_abacus"]
@@ -45,8 +46,29 @@ class AbacusSource(Source):
             if len(found) > 1:
                 raise ValueError("Multiple spatial symmetry exports found; use a directory containing one calculation")
             symfile = found[0] if found else None
+        operations, antiunitary = ([], [])
         if symfile:
-            structure["operations"] = read_symrot(symfile.read_text())
+            operations, antiunitary = read_symrot(symfile.read_text())
+            structure["operations"] = operations
+        settings = read_input_settings(self.directory)
+        structure["nspin"] = int(settings.get("nspin", 1))
+        if structure["nspin"] == 4 and structure.get("operations"):
+            # SOC needs the spinor representation of every operation. ABACUS
+            # writes that block into stru_out.txt; rebuild it here from the
+            # spatial operations so stru_out.txt is no longer required.
+            def spin_rows(operations, antiunitary_flag):
+                return [(antiunitary_flag,
+                         flatten_su2(rotation_to_su2(
+                             cartesian_rotation(structure["lattice"],
+                                                [rotation[3*i:3*i+3] for i in range(3)]))))
+                        for rotation, _ in operations]
+
+            structure["spin_symmetry"] = {
+                "grey_group": 0 if antiunitary else 1,
+                "spin_source": 1,
+                "operations": (spin_rows(operations, 0)
+                               + spin_rows(antiunitary, 1)),
+            }
         structure["source_paths"] = (source, symfile) if symfile else (source,)
         if reader is read_log:
             structure["notes"] = ("geometry precision is limited by the running log; prefer STRU_FINAL when available.",)
@@ -85,6 +107,51 @@ class AbacusSource(Source):
             raise ValueError(
                 "Multiple running logs found; specify calculation in INPUT or use a directory containing one log")
         raise ValueError("No ABACUS structure or running log found; check stru_file and suffix in INPUT")
+
+
+def _is_magnetic_nspin4(directory):
+    """True when the run carries magnetization, i.e. antiunitary operations exist.
+
+    ABACUS builds the Shubnikov group only for nspin=4 with a non-zero moment.
+    In STRU the moment is the number between each species label and its atom
+    count inside ATOMIC_POSITIONS; INPUT's nupdown overrides it.
+    """
+    directory = Path(directory)
+    settings = read_input_settings(directory)
+    if "nupdown" in settings:
+        try:
+            if abs(float(settings["nupdown"])) > 0.0:
+                return True
+        except ValueError:
+            pass
+    stru = directory / settings.get("stru_file", "STRU")
+    if not stru.is_file():
+        return False
+
+    sections = {}
+    current = None
+    for raw in stru.read_text().splitlines():
+        line = re.split(r"#|//", raw, maxsplit=1)[0].strip()
+        if not line:
+            continue
+        if line in SECTIONS:
+            current = sections[line] = []
+        elif current is not None:
+            current.append(line)
+
+    species = [row.split()[0] for row in sections.get("ATOMIC_SPECIES", [])]
+    rows = iter(sections.get("ATOMIC_POSITIONS", []))
+    next(rows, None)  # Coordinate mode.
+    magnetizations = []
+    for label in species:
+        if next(rows, None) != label:
+            return False  # Let read_stru report the malformed block.
+        try:
+            magnetizations.append(float(next(rows).replace("D", "E").replace("d", "e")))
+            int(next(rows))
+        except (StopIteration, ValueError, AttributeError):
+            return False
+    return any(abs(x) > 0.0 for x in magnetizations)
 
 
 def numbers(line, count=3):
@@ -250,6 +317,9 @@ def read_symrot(text):
     operations = []
     pos = start
     while pos < len(lines):
+        # The optional antiunitary trailer terminates the unitary block.
+        if lines[pos].startswith("Antiunitary operations:"):
+            break
         if lines[pos] != str(len(operations)) or pos + 5 + orbital_rows > len(lines):
             raise ValueError("Incomplete or out-of-order symmetry operation")
         rotation = [x for row in lines[pos+1:pos+4] for x in numbers(row)]
@@ -266,6 +336,35 @@ def read_symrot(text):
     if not any(r == identity and all(abs(x-round(x)) < 1e-8 for x in t)
                for r, t in operations):
         raise ValueError("Symmetry operations do not contain the identity")
+    return operations, read_symrot_antiunitary(lines[pos:])
+
+
+def read_symrot_antiunitary(trailer):
+    """Read the optional antiunitary trailer appended after the unitary block.
+
+    ABACUS writes ``Antiunitary operations: N`` followed by N entries of the
+    same shape as the unitary ones, but without orbital rotation matrices.
+    Older exports have no trailer and yield an empty list.
+    """
+    start = next((i for i, line in enumerate(trailer)
+                  if line.startswith("Antiunitary operations:")), None)
+    if start is None:
+        return []
+    count = int(trailer[start].split(":", 1)[1])
+    operations = []
+    pos = start + 1
+    while len(operations) < count:
+        if pos + 4 > len(trailer) or trailer[pos] != str(len(operations)):
+            raise ValueError("Incomplete or out-of-order antiunitary operation")
+        rotation = [x for row in trailer[pos+1:pos+4] for x in numbers(row)]
+        if any(abs(x-round(x)) > 1e-8 for x in rotation):
+            raise ValueError("Noninteger fractional antiunitary rotation")
+        translation = trailer[pos+4]
+        if not (translation.startswith("(") and translation.endswith(")")):
+            raise ValueError("Expected a parenthesized antiunitary translation")
+        operations.append(([int(round(x)) for x in rotation],
+                           numbers(translation[1:-1])))
+        pos += 5
     return operations
 
 
