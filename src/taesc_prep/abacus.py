@@ -53,12 +53,13 @@ class AbacusSource(Source):
             # stru_out.txt kept only the operations that map the sampled
             # k-mesh onto itself. Apply that filter so LibRPA's k-star
             # reconstruction sees a usable set.
-            mesh = self._sampled_mesh()
-            if mesh is not None:
+            grid = self._sampled_grid()
+            if grid is not None:
+                mesh, offset = grid
                 operations = [operation for operation in operations
-                              if preserves_mesh(operation[0], mesh)]
+                              if preserves_mesh(operation[0], mesh, offset)]
                 antiunitary = [operation for operation in antiunitary
-                               if preserves_mesh(operation[0], mesh, (0.0, 0.0, 0.0),
+                               if preserves_mesh(operation[0], mesh, offset,
                                                  antiunitary=True)]
             structure["operations"] = operations
         settings = read_input_settings(self.directory)
@@ -85,18 +86,30 @@ class AbacusSource(Source):
             structure["notes"] = ("geometry precision is limited by the running log; prefer STRU_FINAL when available.",)
         return structure
 
-    def _sampled_mesh(self):
-        """Mesh divisions from KPT.info, or None when it cannot be read.
+    def _sampled_grid(self):
+        """Mesh divisions and grid offset from KPT.info, or None.
 
         The structure conversion runs first, so a missing or unreadable
         KPT.info must not block it; the symmetry filter is simply skipped.
+
+        The offset matters: a shifted grid samples points that a zero-offset
+        test would accept incorrectly, so derive it from the full-grid data
+        rather than assuming a Gamma-centred mesh.
         """
         try:
             settings = read_input_settings(self.directory)
             outdir = self.directory / ("OUT." + settings.get("suffix", "ABACUS"))
-            return read_kpt_info((outdir / "KPT.info").read_text())["mesh"]
+            info = read_kpt_info((outdir / "KPT.info").read_text())
         except (OSError, ValueError, KeyError):
             return None
+        mesh = info["mesh"]
+        full = info["full_direct"]
+        if not full:
+            return None
+        # preserves_mesh takes the shift in units of one grid step and divides
+        # by the mesh, so recover it from the first full-grid coordinate.
+        offset = tuple(full[0][index] * mesh[index] for index in range(3))
+        return mesh, offset
 
     def _extract_bz_sampling(self) -> dict:
         settings = read_input_settings(self.directory)
@@ -377,7 +390,8 @@ def read_symrot(text):
     # Each angular momentum contributes 2*l+1 orbital-matrix rows. A
     # spatial-only export (nspin=4, where the collinear orbital rotations do
     # not exist) omits them and says so in the header.
-    orbital_rows = 0 if "Spatial-only export" in text else (max(lmax) + 1)**2
+    spatial_only = "Spatial-only export" in text
+    orbital_rows = 0 if spatial_only else (max(lmax) + 1)**2
     operations = []
     pos = start
     while pos < len(lines):

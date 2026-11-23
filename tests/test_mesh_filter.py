@@ -42,3 +42,24 @@ class MeshFilterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShiftedGridTests(unittest.TestCase):
+    """A shifted grid samples points that a zero-offset test accepts wrongly."""
+
+    INVERSION = [-1, 0, 0, 0, -1, 0, 0, 0, -1]
+    IDENTITY = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+    def test_gamma_grid_keeps_inversion(self):
+        self.assertTrue(preserves_mesh(self.INVERSION, (2, 1, 1), (0.0, 0.0, 0.0)))
+
+    def test_quarter_shifted_grid_drops_inversion(self):
+        # Points {1/8, 5/8} map to {7/8, 3/8}, outside the sampled set.
+        self.assertFalse(preserves_mesh(self.INVERSION, (2, 1, 1), (0.25, 0.0, 0.0)))
+
+    def test_quarter_shifted_grid_keeps_identity(self):
+        self.assertTrue(preserves_mesh(self.IDENTITY, (2, 1, 1), (0.25, 0.0, 0.0)))
+
+    def test_half_shifted_grid_keeps_inversion(self):
+        # Points {1/4, 3/4} are symmetric about the origin.
+        self.assertTrue(preserves_mesh(self.INVERSION, (2, 1, 1), (0.5, 0.0, 0.0)))
