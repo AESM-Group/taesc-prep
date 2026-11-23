@@ -47,10 +47,16 @@ No k-point block is written.
 
 `symrot_R.txt` exports the cell's full point group, while the retired
 `stru_out.txt` kept only the operations that map the sampled k-mesh onto
-itself. The program applies the same filter, using the mesh it reads from
-`KPT.info`; operations that a non-cubic mesh breaks are dropped, because
-LibRPA reconstructs k-stars from this set. When `KPT.info` cannot be read the
-filter is skipped and every exported operation is written.
+itself. The program applies the same filter, using the mesh and the grid
+offset it reads from `KPT.info`; operations that the sampled points break are
+dropped, because LibRPA reconstructs k-stars from this set. When `KPT.info`
+cannot be read the filter is skipped and every exported operation is written.
+
+The offset is not optional. A shifted grid samples points that a zero-offset
+test accepts incorrectly: inversion on a `2x1x1` Gamma grid maps
+`{1/8, 5/8}` to `{7/8, 3/8}`, so the operation preserves the mesh only when
+the shift is zero. The offset is recovered as `first_full_point * mesh`, the
+convention `preserves_mesh` expects.
 
 For `nspin 4` runs the program also writes the `spin_symmetry` block, which
 carries the SU(2) representative of every operation. The convention is
